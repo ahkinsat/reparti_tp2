@@ -1,0 +1,108 @@
+version: '3.9'
+
+networks:
+  ho_network:
+    driver: bridge
+  bo1_network:
+    driver: bridge
+  bo2_network:
+    driver: bridge
+  rabbitmq_network:
+    driver: bridge
+
+services:
+  rabbitmq:
+    image: ${rabbitmq_image:-rabbitmq:management-alpine}
+    container_name: ${rabbitmq_container_name:-rabbitmq}
+    environment:
+      - RABBITMQ_DEFAULT_USER=${rabbitmq_user:-guest}
+      - RABBITMQ_DEFAULT_PASS=${rabbitmq_pass:-guest}
+    ports:
+      - "${ampq_host_port:-5672}:5672"
+      - "${ampq_mgmt_host_port:-15672}:15672"
+    networks:
+      - rabbitmq_network
+
+  ho_db:
+    image: postgres:16-alpine
+    container_name: ho_db
+    environment:
+      - POSTGRES_DB=ho_sales
+      - POSTGRES_USER=ho_user
+      - POSTGRES_PASSWORD=ho_pass
+    networks:
+      - ho_network
+
+  bo1_db:
+    image: postgres:16-alpine
+    container_name: bo1_db
+    environment:
+      - POSTGRES_DB=bo1_sales
+      - POSTGRES_USER=bo1_user
+      - POSTGRES_PASSWORD=bo1_pass
+    networks:
+      - bo1_network
+
+  bo2_db:
+    image: postgres:16-alpine
+    container_name: bo2_db
+    environment:
+      - POSTGRES_DB=bo2_sales
+      - POSTGRES_USER=bo2_user
+      - POSTGRES_PASSWORD=bo2_pass
+    networks:
+      - bo2_network
+
+  javadev:
+    build:
+      context: .
+      dockerfile: ${javadev_dockerfile:-javadev.Dockerfile}
+      args:
+        USERNAME: ${username:-dev}
+        USER_UID: ${user_uid:-1000}
+        USER_GID: ${user_gid:-1000}
+    image: ${javadev_image_name:-javadev}:${javadev_image_tag:-latest}
+    container_name: ${javadev_container_name:-javadev}
+    user: "${user_uid:-1000}:${user_gid:-1000}"
+    userns_mode: ${javadev_userns_mode:-keep-id} # podman specific, in docker u use host or a custom uid mapping
+    hostname: ${javadev_hostname:-javadev}
+    ports:
+      - "${java_host_port:-8080}:8080"
+    volumes:
+      - ${source_code_path:-.}:/home/${username:-dev}/workspace
+      - ./container.aliases.sh:/home/${username:-dev}/.bash_aliases:ro
+    working_dir: /home/${username:-dev}/workspace
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${rabbitmq_user:-guest}
+      - RABBITMQ_PASSWORD=${rabbitmq_pass:-guest}
+      - HO_DB_HOST=ho_db
+      - HO_DB_PORT=5432
+      - HO_DB_NAME=ho_sales
+      - HO_DB_USER=ho_user
+      - HO_DB_PASSWORD=ho_pass
+      - BO1_DB_HOST=bo1_db
+      - BO1_DB_PORT=5432
+      - BO1_DB_NAME=bo1_sales
+      - BO1_DB_USER=bo1_user
+      - BO1_DB_PASSWORD=bo1_pass
+      - BO2_DB_HOST=bo2_db
+      - BO2_DB_PORT=5432
+      - BO2_DB_NAME=bo2_sales
+      - BO2_DB_USER=bo2_user
+      - BO2_DB_PASSWORD=bo2_pass
+    networks:
+      - ho_network
+      - bo1_network
+      - bo2_network
+      - rabbitmq_network
+    depends_on:
+      - ho_db
+      - bo1_db
+      - bo2_db
+      - rabbitmq
+
+# podman specific bug: --pod and --userns conflict 
+x-podman:
+  in_pod: false
