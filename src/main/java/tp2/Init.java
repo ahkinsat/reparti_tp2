@@ -55,6 +55,8 @@ public class Init {
         // Declare RabbitMQ queue
         try (var channel = RabbitMqManager.createChannel()) {
             RabbitMqManager.declareQueue(channel);
+        } catch (Exception e) {
+            System.err.println("Warning: Failed to declare queue: " + e.getMessage());
         }
 
         Files.createFile(MARKER);
