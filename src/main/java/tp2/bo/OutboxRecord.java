@@ -9,5 +9,6 @@ public record OutboxRecord(
     String eventType,
     Instant eventTime,
     String payload,   // JSON of Sale for WRITE, "{}" for DELETE
-    int retryCount
+    int retryCount,
+    boolean sent
 ) {}

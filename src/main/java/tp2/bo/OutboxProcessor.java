@@ -12,48 +12,44 @@ import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-public class OutboxProcessor implements Runnable {
+public class OutboxProcessor {
     private final int boNumber;
-    private final AtomicBoolean running = new AtomicBoolean(false);
     private com.rabbitmq.client.Channel channel;
 
-    public OutboxProcessor(int boNumber) { this.boNumber = boNumber; }
-
-    public void start() {
-        if (running.compareAndSet(false, true)) {
-            new Thread(this, "OutboxProcessor-BO"+boNumber).start();
-        }
+    public OutboxProcessor(int boNumber) {
+        this.boNumber = boNumber;
     }
 
-    public void stop() { running.set(false); }
-    public boolean isRunning() { return running.get(); }
-
-    @Override
     public void run() {
-        try {
-            channel = RabbitMqManager.createChannel();
-            RabbitMqManager.declareQueue(channel);
-        } catch (Exception e) {
-            System.err.println("BO"+boNumber+" failed to connect to RabbitMQ: "+e.getMessage());
-            running.set(false);
-            return;
+        System.err.println("BO" + boNumber + " processor starting...");
+
+        // Infinite retry for RabbitMQ connection
+        while (true) {
+            try {
+                channel = RabbitMqManager.createChannel();
+                RabbitMqManager.declareQueue(channel);
+                System.err.println("BO" + boNumber + " connected to RabbitMQ");
+                break;
+            } catch (Exception e) {
+                System.err.println("BO" + boNumber + " waiting for RabbitMQ: " + e.getMessage());
+                try { Thread.sleep(10000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            }
         }
 
-        while (running.get()) {
+        // Main processing loop
+        while (true) {
             try (Connection conn = Database.getBoConnection(boNumber)) {
                 conn.setAutoCommit(false);
-                // Fetch unsent events
                 String selectSql = "SELECT event_id, sale_id, event_type, event_time, payload, retry_count FROM outbox WHERE sent = false ORDER BY created_at LIMIT 100 FOR UPDATE SKIP LOCKED";
                 try (PreparedStatement ps = conn.prepareStatement(selectSql);
                      ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        if (!running.get()) break;
                         UUID eventId = (UUID) rs.getObject("event_id");
                         UUID saleId = (UUID) rs.getObject("sale_id");
                         String eventType = rs.getString("event_type");
-                        Instant eventTime = rs.getObject("event_time", Instant.class);
+                        java.sql.Timestamp ts = rs.getObject("event_time", java.sql.Timestamp.class);
+                        Instant eventTime = ts != null ? ts.toInstant() : null;
                         String payload = rs.getString("payload");
                         int retryCount = rs.getInt("retry_count");
 
@@ -65,13 +61,17 @@ public class OutboxProcessor implements Runnable {
                             } else {
                                 msg = Message.forDelete(eventId, saleId, eventTime);
                             }
-                            channel.basicPublish("", Config.rmqQueue(), null, msg.toJson().getBytes());
+                            System.err.println("BO"+boNumber+" sending event " + eventId + " to queue " + Config.rmqQueue());
+                            String json = msg.toJson();
+                            System.err.println("Message: " + json);
+                            channel.basicPublish("", Config.rmqQueue(), null, json.getBytes());
                             // Success: delete from outbox
                             try (PreparedStatement del = conn.prepareStatement("DELETE FROM outbox WHERE event_id = ?")) {
                                 del.setObject(1, eventId);
                                 del.executeUpdate();
                             }
                         } catch (Exception e) {
+                            e.printStackTrace();  // ← ADD THIS to see real error
                             // Send failed – increment retry
                             try (PreparedStatement upd = conn.prepareStatement("UPDATE outbox SET retry_count = retry_count + 1 WHERE event_id = ?")) {
                                 upd.setObject(1, eventId);
@@ -86,8 +86,18 @@ public class OutboxProcessor implements Runnable {
                 conn.commit();
                 Thread.sleep(TimeUnit.SECONDS.toMillis(5));
             } catch (Exception e) {
-                if (running.get()) e.printStackTrace();
+                System.err.println("BO" + boNumber + " error in main loop: " + e.getMessage());
+                try { Thread.sleep(5000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
             }
         }
+    }
+
+    public static void main(String[] args) {
+        if (args.length < 1) {
+            System.err.println("Usage: java tp2.bo.OutboxProcessor <bo_number>");
+            System.exit(1);
+        }
+        int bo = Integer.parseInt(args[0]);
+        new OutboxProcessor(bo).run();
     }
 }

@@ -39,7 +39,7 @@ public class BranchOfficeApi {
                 ps.setObject(1, eventId);
                 ps.setObject(2, sale.saleId());
                 ps.setString(3, "WRITE");
-                ps.setObject(4, Instant.now());
+                ps.setObject(4, java.sql.Timestamp.from(Instant.now()));
                 ps.setString(5, Util.toJson(sale));
                 ps.executeUpdate();
             }
@@ -63,7 +63,7 @@ public class BranchOfficeApi {
                 ps.setObject(1, eventId);
                 ps.setObject(2, saleId);
                 ps.setString(3, "DELETE");
-                ps.setObject(4, Instant.now());
+                ps.setObject(4, java.sql.Timestamp.from(Instant.now()));
                 ps.setString(5, "{}");
                 ps.executeUpdate();
             }
@@ -119,7 +119,7 @@ public class BranchOfficeApi {
     public List<OutboxRecord> listEvents(int limit) throws SQLException {
         List<OutboxRecord> list = new ArrayList<>();
         try (Connection conn = Database.getBoConnection(boNumber);
-             PreparedStatement ps = conn.prepareStatement("SELECT event_id, sale_id, event_type, event_time, payload, retry_count FROM outbox ORDER BY created_at DESC LIMIT ?")) {
+             PreparedStatement ps = conn.prepareStatement("SELECT event_id, sale_id, event_type, event_time, payload, retry_count, sent FROM outbox ORDER BY created_at DESC LIMIT ?")) {
             ps.setInt(1, limit);
             ResultSet rs = ps.executeQuery();
             while (rs.next()) {
@@ -127,9 +127,10 @@ public class BranchOfficeApi {
                     (UUID) rs.getObject("event_id"),
                     (UUID) rs.getObject("sale_id"),
                     rs.getString("event_type"),
-                    rs.getObject("event_time", Instant.class),
+                    rs.getObject("event_time", java.sql.Timestamp.class).toInstant(),
                     rs.getString("payload"),
-                    rs.getInt("retry_count")
+                    rs.getInt("retry_count"),
+                    rs.getBoolean("sent")
                 ));
             }
         }
@@ -138,7 +139,7 @@ public class BranchOfficeApi {
 
     public OutboxRecord getEvent(UUID eventId) throws SQLException {
         try (Connection conn = Database.getBoConnection(boNumber);
-             PreparedStatement ps = conn.prepareStatement("SELECT event_id, sale_id, event_type, event_time, payload, retry_count FROM outbox WHERE event_id = ?")) {
+             PreparedStatement ps = conn.prepareStatement("SELECT event_id, sale_id, event_type, event_time, payload, retry_count, sent FROM outbox WHERE event_id = ?")) {
             ps.setObject(1, eventId);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
@@ -146,12 +147,58 @@ public class BranchOfficeApi {
                     (UUID) rs.getObject("event_id"),
                     (UUID) rs.getObject("sale_id"),
                     rs.getString("event_type"),
-                    rs.getObject("event_time", Instant.class),
+                    rs.getObject("event_time", java.sql.Timestamp.class).toInstant(),
                     rs.getString("payload"),
-                    rs.getInt("retry_count")
+                    rs.getInt("retry_count"),
+                    rs.getBoolean("sent")
                 );
             }
             return null;
         }
+    }
+
+    public String listSalesToCsv(int limit) throws SQLException {
+        List<Sale> sales = listSales(limit);
+        StringBuilder sb = new StringBuilder();
+        sb.append("sale_id,sale_date,region,product,quantity,cost,amount,tax,total\n");
+        for (Sale s : sales) {
+            sb.append(String.format("%s,%s,%s,%s,%d,%.2f,%.2f,%.2f,%.2f\n",
+                s.saleId(), s.saleDate(), s.region(), s.product(), s.quantity(),
+                s.cost(), s.amount(), s.tax(), s.total()));
+        }
+        return sb.toString();
+    }
+
+    public String getSaleToCsv(UUID saleId) throws SQLException {
+        var sale = getSale(saleId);
+        if (sale.isEmpty()) {
+            return "NOT FOUND\n";
+        }
+        Sale s = sale.get();
+        return String.format("%s,%s,%s,%s,%d,%.2f,%.2f,%.2f,%.2f\n",
+            s.saleId(), s.saleDate(), s.region(), s.product(), s.quantity(),
+            s.cost(), s.amount(), s.tax(), s.total());
+    }
+
+    public String listEventsToCsv(int limit) throws SQLException {
+        List<OutboxRecord> events = listEvents(limit);
+        StringBuilder sb = new StringBuilder();
+        sb.append("event_id,sale_id,event_type,event_time,payload,retry_count\n");
+        for (OutboxRecord e : events) {
+            sb.append(String.format("%s,%s,%s,%s,%s,%d\n",
+                e.eventId(), e.saleId(), e.eventType(), e.eventTime(), 
+                e.payload(), e.retryCount()));
+        }
+        return sb.toString();
+    }
+
+    public String getEventToCsv(UUID eventId) throws SQLException {
+        OutboxRecord ev = getEvent(eventId);
+        if (ev == null) {
+            return "NOT FOUND\n";
+        }
+        return String.format("%s,%s,%s,%s,%s,%d\n",
+            ev.eventId(), ev.saleId(), ev.eventType(), ev.eventTime(), 
+            ev.payload(), ev.retryCount());
     }
 }

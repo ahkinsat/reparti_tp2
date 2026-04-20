@@ -3,6 +3,7 @@ package tp2.ho;
 import tp2.Database;
 
 import java.sql.*;
+import java.time.Instant;
 import java.util.*;
 
 public class HeadOfficeApi {
@@ -58,12 +59,14 @@ public class HeadOfficeApi {
             ps.setInt(1, limit);
             ResultSet rs = ps.executeQuery();
             while (rs.next()) {
+                Timestamp appliedAtTs = rs.getObject("applied_at", java.sql.Timestamp.class);
+                Instant appliedAt = appliedAtTs != null ? appliedAtTs.toInstant() : null;
                 list.add(new EventView(
                     rs.getObject("event_id", java.util.UUID.class),
                     rs.getObject("sale_id", java.util.UUID.class),
                     rs.getString("event_type"),
-                    rs.getObject("event_time", java.time.Instant.class),
-                    rs.getObject("applied_at", java.time.Instant.class)
+                    rs.getObject("event_time", java.sql.Timestamp.class).toInstant(),
+                    appliedAt
                 ));
             }
         }
@@ -76,12 +79,14 @@ public class HeadOfficeApi {
             ps.setObject(1, eventId);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
+                Timestamp appliedAtTs = rs.getObject("applied_at", java.sql.Timestamp.class);
+                Instant appliedAt = appliedAtTs != null ? appliedAtTs.toInstant() : null;
                 return Optional.of(new EventView(
                     rs.getObject("event_id", java.util.UUID.class),
                     rs.getObject("sale_id", java.util.UUID.class),
                     rs.getString("event_type"),
-                    rs.getObject("event_time", java.time.Instant.class),
-                    rs.getObject("applied_at", java.time.Instant.class)
+                    rs.getObject("event_time", java.sql.Timestamp.class).toInstant(),
+                    appliedAt
                 ));
             }
             return Optional.empty();
@@ -97,7 +102,7 @@ public class HeadOfficeApi {
             while (rs.next()) {
                 list.add(new SyncRecord(
                     rs.getObject("sale_id", java.util.UUID.class),
-                    rs.getObject("last_event_time", java.time.Instant.class),
+                    rs.getObject("last_event_time", java.sql.Timestamp.class).toInstant(),
                     rs.getObject("last_event_id", java.util.UUID.class)
                 ));
             }
@@ -113,12 +118,75 @@ public class HeadOfficeApi {
             if (rs.next()) {
                 return Optional.of(new SyncRecord(
                     rs.getObject("sale_id", java.util.UUID.class),
-                    rs.getObject("last_event_time", java.time.Instant.class),
+                    rs.getObject("last_event_time", java.sql.Timestamp.class).toInstant(),
                     rs.getObject("last_event_id", java.util.UUID.class)
                 ));
             }
             return Optional.empty();
+        }   
+    }
+
+    public String listSalesToCsv(int limit) throws SQLException {
+        List<SaleView> sales = listSales(limit);
+        StringBuilder sb = new StringBuilder();
+        sb.append("sale_id,sale_date,region,product,quantity,cost,amount,tax,total\n");
+        for (SaleView s : sales) {
+            sb.append(String.format("%s,%s,%s,%s,%d,%.2f,%.2f,%.2f,%.2f\n",
+                s.saleId(), s.saleDate(), s.region(), s.product(), s.quantity(),
+                s.cost(), s.amount(), s.tax(), s.total()));
         }
+        return sb.toString();
+    }
+
+    public String getSaleToCsv(UUID saleId) throws SQLException {
+        var sale = getSale(saleId);
+        if (sale.isEmpty()) {
+            return "NOT FOUND\n";
+        }
+        SaleView s = sale.get();
+        return String.format("%s,%s,%s,%s,%d,%.2f,%.2f,%.2f,%.2f\n",
+            s.saleId(), s.saleDate(), s.region(), s.product(), s.quantity(),
+            s.cost(), s.amount(), s.tax(), s.total());
+    }
+
+    public String listEventsToCsv(int limit) throws SQLException {
+        List<EventView> events = listEvents(limit);
+        StringBuilder sb = new StringBuilder();
+        sb.append("event_id,sale_id,event_type,event_time,applied_at\n");
+        for (EventView e : events) {
+            sb.append(String.format("%s,%s,%s,%s,%s\n",
+                e.eventId(), e.saleId(), e.eventType(), e.eventTime(), e.appliedAt()));
+        }
+        return sb.toString();
+    }
+
+    public String getEventToCsv(UUID eventId) throws SQLException {
+        var ev = getEvent(eventId);
+        if (ev.isEmpty()) {
+            return "NOT FOUND\n";
+        }
+        EventView e = ev.get();
+        return String.format("%s,%s,%s,%s,%s\n",
+            e.eventId(), e.saleId(), e.eventType(), e.eventTime(), e.appliedAt());
+    }
+
+    public String listSyncsToCsv(int limit) throws SQLException {
+        List<SyncRecord> syncs = listSyncs(limit);
+        StringBuilder sb = new StringBuilder();
+        sb.append("sale_id,last_event_time,last_event_id\n");
+        for (SyncRecord s : syncs) {
+            sb.append(String.format("%s,%s,%s\n", s.saleId(), s.lastEventTime(), s.lastEventId()));
+        }
+        return sb.toString();
+    }
+
+    public String getSyncToCsv(UUID saleId) throws SQLException {
+        var sync = getSync(saleId);
+        if (sync.isEmpty()) {
+            return "NOT FOUND\n";
+        }
+        SyncRecord s = sync.get();
+        return String.format("%s,%s,%s\n", s.saleId(), s.lastEventTime(), s.lastEventId());
     }
 
     // View records for CSV output
